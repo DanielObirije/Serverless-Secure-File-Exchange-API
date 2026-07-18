@@ -1,3 +1,6 @@
+# Data source for current AWS caller identity
+data "aws_caller_identity" "current" {}
+
 resource "random_string" "bucket_surffix" {
   length = 6
   special = false
@@ -9,6 +12,9 @@ locals {
   access_log_bucket_name = "file-sharing-demo-access-log"
   enable_documents_transition = true
   enable_uploads_cleanup = true
+  enable_cloudtrail_logging = true
+  notification_email = "johndoe@gmail.com"
+  project_name = "file-sharing-demo"
   common_tags = merge(
     {
         Project = "file-sharing-demo"
@@ -165,3 +171,193 @@ resource "aws_s3_bucket_lifecycle_configuration" "file_sharing" {
   }
 }
 
+# IAM role for presigned URL generation (for applications/services)
+resource "aws_iam_role" "presigned_url_generator" {
+  name = "${local.bucket_name}presigned-url-generator"
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement =[
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = [
+          "lambda.amazonaws.com",
+          "ec2.amazonaws.com"
+        ]
+      }
+    ]
+    AWS = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"
+  })
+
+  tags = merge(local.common_tags,{
+    Name = "Presigned URL Generator Role"
+    Description = "IAM role for generating presigned URLs"
+  })
+}
+
+# IAM policy for presigned URL generation
+
+resource "aws_iam_role_policy" "presigned_url_generator" {
+  name = "${local.bucket_name}presigned-url-policy"
+  role = aws_iam_role.presigned_url_generator.id
+
+  policy = jsondecode({
+       Version = "2012-10-17"
+       Statement = [
+        {
+          Effect = "Allow"
+          Action = [
+            "s3:GetObject",
+            "s3:PutObject",
+            "s3:DeleteObject",
+            "s3:GetObjectVersion",
+            "s3:PutObjectAcl"
+          ]
+          Resource = [
+            "${aws_s3_bucket.file_sharing.arn}/*"
+          ]
+        },
+        {
+          Effect = "Allow"
+          Action = [
+          "s3:ListBucket",
+          "s3:GetBucketLocation",
+          "s3:GetBucketVersioning"
+          ]
+          Resource = "${aws_s3_bucket.file_sharing.arn}"
+        }
+       ]
+  })
+}
+
+# CloudWatch Log Group for monitoring S3 access (if CloudTrail is enabled)
+
+resource "aws_cloudwatch_log_group" "s3_access_logs" {
+  count =  local.enable_cloudtrail_logging ? [1] : []
+  name = "/aws/cloudtrail/${local.project_name}-s3-access"
+  retention_in_days = 30
+  
+  tags = merge(local.common_tags,{
+    Name = "S3 Access Logs"
+    Description = "CloudWatch logs for S3 API access"
+  })
+}
+
+resource "aws_cloudtrail" "s3_access" {
+   count =  local.enable_cloudtrail_logging ? [1] : []
+   name = "${local.project_name}-s3-cloudtrail"
+   s3_bucket_name = aws_s3_bucket.file_sharing.bucket
+   include_global_service_events = false
+   is_multi_region_trail = false
+   enable_logging = true
+
+   cloud_watch_logs_group_arn = "${aws_cloudwatch_log_group.s3_access_logs[0].arn}:*"
+   cloud_watch_logs_role_arn = aws_iam_role.cloudtrail_logs[0].arn
+
+   event_selector {
+     read_write_type = "All"
+     include_management_events = false
+
+     data_resource {
+      type   = "AWS::S3::Object"
+      values = ["${aws_s3_bucket.file_sharing.arn}/*"]
+     }
+
+     data_resource {
+      type   = "AWS::S3::Bucket"
+      values = ["${aws_s3_bucket.file_sharing.arn}"]
+     }
+
+   }
+   tags = merge(local.common_tags,{
+    Name        = "S3 CloudTrail"
+    Description = "CloudTrail for S3 API access logging"
+   })
+   
+}
+
+# IAM role for CloudTrail logs
+
+resource "aws_iam_role" "cloudtrail_logs" {
+   count =  local.enable_cloudtrail_logging ? [1] : []
+   name = "${local.project_name}-cloudtrail-logs-role"
+   assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement =[
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = [
+          "cloudtrail.amazonaws.com",
+        ]
+      }
+    ]
+  })
+
+  tags = local.common_tags
+}
+
+# IAM policy for CloudTrail to write to CloudWatch Logs
+
+
+resource "aws_iam_role_policy" "cloudtrail_logs" {
+  count =  local.enable_cloudtrail_logging ? [1] : []
+   name = "${local.project_name}-cloudtrail-logs-policy"
+   role = aws_iam_role.cloudtrail_logs[0].id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Resource = "${aws_cloudwatch_log_group.s3_access_logs[0].arn}:*"
+      }
+    ]
+  })
+}
+
+# SNS topic for notifications (if email is provided)
+resource "aws_sns_topic" "file_sharing_alerts" {
+   count =  local.notification_email ? [1] : []
+   name = "${local.project_name}-file-sharing-alerts"
+   tags = merge(local.common_tags, {
+    Name        = "File Sharing Alerts"
+    Description = "SNS topic for file sharing system alerts"
+  })
+}
+
+# SNS subscription for email notifications
+resource "aws_sns_topic_subscription" "file_sharing_alerts" {
+  count =  local.notification_email ? [1] : []
+  topic_arn =  aws_sns_topic.file_sharing_alerts[0].arn
+  protocol = "email"
+  endpoint = local.notification_email
+}
+
+# CloudWatch metric alarm for unusual S3 access patterns
+
+resource "aws_cloudwatch_metric_alarm" "high_s3_requests" {
+   count =  local.notification_email ? [1] : []
+   alarm_name =  "${local.project_name}-high-s3-requests"
+   comparison_operator = "GreaterThanThreshold"
+  evaluation_periods  = "2"
+  metric_name         = "NumberOfObjects"
+  namespace           = "AWS/S3"
+  period              = "300"
+  statistic           = "Average"
+  threshold           = "1000"
+  alarm_description   = "This metric monitors S3 rmequest volume"
+  alarm_actions      = [aws_sns_topic.file_sharing_alerts[0].arn]
+
+  dimensions = {
+    BucketName = aws_s3_bucket.file_sharing.bucket
+  }
+  tags = merge(local.common_tags, {
+    Name        = "High S3 Requests Alarm"
+    Description = "Monitors for unusual S3 access patterns"
+  })
+}
