@@ -345,7 +345,7 @@ resource "aws_cloudwatch_metric_alarm" "high_s3_requests" {
    alarm_name =  "${local.project_name}-high-s3-requests"
    comparison_operator = "GreaterThanThreshold"
   evaluation_periods  = "2"
-  metric_name         = "NumberOfObjects"
+  metric_name         = "AllRequests"
   namespace           = "AWS/S3"
   period              = "300"
   statistic           = "Average"
