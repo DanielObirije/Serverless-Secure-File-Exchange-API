@@ -341,9 +341,9 @@ resource "aws_sns_topic_subscription" "file_sharing_alerts" {
 # CloudWatch metric alarm for unusual S3 access patterns
 
 resource "aws_cloudwatch_metric_alarm" "high_s3_requests" {
-   count =  local.notification_email ? [1] : []
-   alarm_name =  "${local.project_name}-high-s3-requests"
-   comparison_operator = "GreaterThanThreshold"
+  count =  local.notification_email ? [1] : []
+  alarm_name =  "${local.project_name}-high-s3-requests"
+  comparison_operator = "GreaterThanThreshold"
   evaluation_periods  = "2"
   metric_name         = "AllRequests"
   namespace           = "AWS/S3"
