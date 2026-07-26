@@ -6,46 +6,51 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path"
+	"path/filepath"
+	"sort"
 	"strings"
 	"time"
-	"uuid"
+
+	"github.com/google/uuid"
 
 	"github.com/aws/aws-lambda-go/events"
 	"github.com/aws/aws-lambda-go/lambda"
-	"github.com/aws/aws-sdk-go/aws"
-	"github.com/aws/aws-sdk-go/aws/session"
-	"github.com/aws/aws-sdk-go/service/s3"
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 )
 
 type Config struct {
 	BucketName         string
 	Region             string
-	UploadExpiration   int64
-	DownloadExpiration int64
+	UploadExpiration   time.Duration
+	DownloadExpiration time.Duration
 	MaxFileSize        int64
-	AllowedExtentions  map[string]bool
+	AllowedExtensions  map[string]bool
 }
 
 var (
-	cfg      *Config
-	s3Client *s3.S3
+	cfg           *Config
+	s3Client      *s3.Client
+	presignClient *s3.PresignClient
 )
 
 type UploadUrlRequest struct {
 	Filename string `json:"filename"`
 }
 
-type UploadUrlRespond struct {
-	UploadUrl string `json:"uploadUrl"`
-	key       string
-	ExpiresIn int64 `json:"expiresIn"`
+type UploadUrlResponse struct {
+	UploadURL string `json:"uploadUrl"`
+	Key       string `json:"key"`
+	ExpiresIn int64  `json:"expiresIn"`
 }
 
-type DowloadUrlRequest struct {
+type DownloadUrlRequest struct {
 	Key string `json:"key"`
 }
 
-type DowloadUrlResponse struct {
+type DownloadUrlResponse struct {
 	DownloadURL string `json:"downloadUrl"`
 	ExpiresIn   int64  `json:"expiresIn"`
 }
@@ -68,10 +73,10 @@ func init() {
 	cfg = &Config{
 		BucketName:         bucketName,
 		Region:             region,
-		UploadExpiration:   900,
-		DownloadExpiration: 300,
+		UploadExpiration:   15 * time.Minute,
+		DownloadExpiration: 5 * time.Minute,
 		MaxFileSize:        10 * 1024 * 1024,
-		AllowedExtentions: map[string]bool{
+		AllowedExtensions: map[string]bool{
 			"pdf":  true,
 			"png":  true,
 			"jpg":  true,
@@ -79,10 +84,16 @@ func init() {
 			"docx": true,
 		},
 	}
-	sess := session.Must(session.NewSession(&aws.Config{
-		Region: aws.String(region),
-	}))
-	s3Client = s3.New(sess)
+	awsCfg, err := config.LoadDefaultConfig(
+		context.Background(),
+		config.WithRegion(region),
+	)
+	if err != nil {
+		log.Fatalf("failed to load AWS config: %v", err)
+	}
+
+	s3Client = s3.NewFromConfig(awsCfg)
+	presignClient = s3.NewPresignClient(s3Client)
 }
 
 func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
@@ -91,30 +102,31 @@ func handler(ctx context.Context, request events.APIGatewayProxyRequest) (events
 
 	switch {
 	case request.Path == "/health" && request.HTTPMethod == "GET":
-		return handleHealth(ctx)
+		return handleHealth()
 	case request.Path == "/upload-url" && request.HTTPMethod == "POST":
 		return handleUploadUrl(ctx, request)
-	case request.Path == "/dowlaod-url" && request.HTTPMethod == "POST":
-		return handleDowloadUrl(ctx, request)
+	case request.Path == "/download-url" && request.HTTPMethod == "POST":
+		return handleDownloadUrl(ctx, request)
 	default:
 		return events.APIGatewayProxyResponse{
 			StatusCode: 404,
 			Body:       `{"error": "Not Found"}`,
 			Headers: map[string]string{
-				"Content-Type": "application/json",
+				"Content-Type":                "application/json",
+				"Access-Control-Allow-Origin": "*",
 			},
 		}, nil
 	}
 }
 
-func handleHealth(ctx context.Context) (events.APIGatewayProxyResponse, error) {
+func handleHealth() (events.APIGatewayProxyResponse, error) {
 	response := map[string]interface{}{
 		"status":      "healthy",
 		"service":     "presigned-url-generator",
 		"timestamp":   time.Now().Unix(),
 		"bucket":      cfg.BucketName,
 		"region":      cfg.Region,
-		"maxFileSize": cfg.Region,
+		"maxFileSize": cfg.MaxFileSize,
 	}
 
 	body, err := json.Marshal(response)
@@ -125,7 +137,8 @@ func handleHealth(ctx context.Context) (events.APIGatewayProxyResponse, error) {
 		StatusCode: 200,
 		Body:       string(body),
 		Headers: map[string]string{
-			"Content-Type": "application/json",
+			"Content-Type":                "application/json",
+			"Access-Control-Allow-Origin": "*",
 		},
 	}, nil
 
@@ -133,42 +146,51 @@ func handleHealth(ctx context.Context) (events.APIGatewayProxyResponse, error) {
 
 func handleUploadUrl(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
 	var req UploadUrlRequest
+
 	if err := json.Unmarshal([]byte(request.Body), &req); err != nil {
-		return ErrorResponse(400, "Invalid request body", err), nil
+		return errorResponse(400, "Invalid request body", err), nil
 	}
 
-	if req.Filename == "" {
-		return ErrorResponse(400, "filename is required", nil), nil
+	filename := path.Base(req.Filename)
+	if filename == "." || filename == "" {
+		return errorResponse(400, "filename is required", nil), nil
 	}
 
-	ext := getFileExtention(req.Filename)
+	ext := getFileExtension(filename)
+
 	if ext == "" {
 		return errorResponse(400, "File must have an extension", nil), nil
 	}
 
 	if !cfg.AllowedExtensions[ext] {
-		return errorResponse(400, fmt.Sprintf("File extension .%s not allowed. Allowed: %v", ext, getAllowedExtensionsList(cfg.AllowedExtensions)), nil), nil
+		return errorResponse(400, fmt.Sprintf("File extension .%s not allowed. Allowed: %v", ext, getAllowedExtensionList(cfg.AllowedExtensions)), nil), nil
 	}
 
 	fileID := uuid.New().String()
-	key := fmt.Sprintf("uploads/%s/%s", fileID, req.Filename)
+	key := fmt.Sprintf("uploads/%s/%s", fileID, filename)
 
-	reqParams := &s3.PutObjectInput{
-		Bucket: aws.String(cfg.BucketName),
-		Key:    aws.String(key),
-	}
-
-	presignedURL, err := s3Client.PresignRequest(reqParams, cfg.UploadExpiration)
+	result, err := presignClient.PresignPutObject(
+		ctx,
+		&s3.PutObjectInput{
+			Bucket: aws.String(cfg.BucketName),
+			Key:    aws.String(key),
+		},
+		func(opts *s3.PresignOptions) {
+			opts.Expires = cfg.UploadExpiration
+		},
+	)
 
 	if err != nil {
-		log.Printf("Failed to generate presigned URL: %v", err)
+		log.Printf("Failed to generate upload presigned URL: %v", err)
 		return errorResponse(500, "Failed to generate upload URL", err), nil
 	}
 
-	response := UploadUrlRespond{
-		UploadUrl: presignedURL,
-		key:       key,
-		ExpiresIn: cfg.UploadExpiration,
+	presignedURL := result.URL
+
+	response := UploadUrlResponse{
+		UploadURL: presignedURL,
+		Key:       key,
+		ExpiresIn: int64(cfg.UploadExpiration.Seconds()),
 	}
 
 	body, err := json.Marshal(response)
@@ -180,13 +202,14 @@ func handleUploadUrl(ctx context.Context, request events.APIGatewayProxyRequest)
 		StatusCode: 200,
 		Body:       string(body),
 		Headers: map[string]string{
-			"Content-Type": "application/json",
+			"Content-Type":                "application/json",
+			"Access-Control-Allow-Origin": "*",
 		},
 	}, nil
 }
 
-func handleDowloadUrl(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
-	var req DowloadUrlRequest
+func handleDownloadUrl(ctx context.Context, request events.APIGatewayProxyRequest) (events.APIGatewayProxyResponse, error) {
+	var req DownloadUrlRequest
 	if err := json.Unmarshal([]byte(request.Body), &req); err != nil {
 		return errorResponse(400, "Invalid request body", err), nil
 	}
@@ -198,20 +221,28 @@ func handleDowloadUrl(ctx context.Context, request events.APIGatewayProxyRequest
 	if !strings.HasPrefix(req.Key, "uploads/") {
 		return errorResponse(403, "Access denied: can only download from uploads/ path", nil), nil
 	}
-	reqParams := &s3.GetObjectAclInput{
-		Bucket: aws.String(&cfg.BucketName),
-		Key:    string(req.Key),
-	}
 
-	presignedURL, err := s3Client.PresignRequest(reqParams, cfg.DownloadExpiration)
+	result, err := presignClient.PresignGetObject(
+		ctx,
+		&s3.GetObjectInput{
+			Bucket: aws.String(cfg.BucketName),
+			Key:    aws.String(req.Key),
+		},
+		func(opts *s3.PresignOptions) {
+			opts.Expires = cfg.DownloadExpiration
+		},
+	)
+
 	if err != nil {
 		log.Printf("Failed to generate download presigned URL: %v", err)
 		return errorResponse(500, "Failed to generate download URL", err), nil
 	}
 
-	response := DowloadUrlResponse{
+	presignedURL := result.URL
+
+	response := DownloadUrlResponse{
 		DownloadURL: presignedURL,
-		ExpiresIn:   cfg.DownloadExpiration,
+		ExpiresIn:   int64(cfg.DownloadExpiration.Seconds()),
 	}
 	body, err := json.Marshal(response)
 	if err != nil {
@@ -221,24 +252,22 @@ func handleDowloadUrl(ctx context.Context, request events.APIGatewayProxyRequest
 		StatusCode: 200,
 		Body:       string(body),
 		Headers: map[string]string{
-			"Content-Type": "application/json",
+			"Content-Type":                "application/json",
+			"Access-Control-Allow-Origin": "*",
 		},
 	}, nil
 }
 
-func getFileExtention(filename string) string {
-	parts := strings.Split(filename, ".")
-	if len(parts) < 2 {
-		return ""
-	}
-	return strings.ToLower(parts[len(parts)-1])
+func getFileExtension(filename string) string {
+	return strings.TrimPrefix(strings.ToLower(filepath.Ext(filename)), ".")
 }
 
-func getAllowedExtentionList(extMap map[string]bool) []string {
+func getAllowedExtensionList(extMap map[string]bool) []string {
 	var exts []string
 	for ext := range extMap {
 		exts = append(exts, ext)
 	}
+	sort.Strings(exts)
 	return exts
 }
 
@@ -256,7 +285,8 @@ func errorResponse(statusCode int, message string, err error) events.APIGatewayP
 		StatusCode: statusCode,
 		Body:       string(body),
 		Headers: map[string]string{
-			"Content-Type": "application/json",
+			"Content-Type":                "application/json",
+			"Access-Control-Allow-Origin": "*",
 		},
 	}
 }
