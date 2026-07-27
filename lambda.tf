@@ -1,0 +1,70 @@
+#Data source to get the Lambda zip file
+data "archive_file" "lambda_zip"{
+  type = "zip"
+  source_dir = "${path.module}/lambda"
+  output_path = "${path.module}/lambda-function.zip"
+  excludes = [ 
+     ".git",
+    "*.go",
+    "go.mod",
+    "go.sum",
+    "Makefile",
+    "README.md"
+   ]
+   # check this out later the excludes and paths in golang
+}
+
+# Lambda function
+resource "aws_lambda_function" "presigned_url_api" {
+  filename = data.archive_file.lambda_zip.output_path
+  function_name = "${local.project_name}-presigned-url-api"
+  role = aws_iam_role.lambda_execution_role.arn
+  handler = "bootstrap"  #investigate this For Go on provided.al2
+  runtime = "provided.al2"
+  timeout          = 10 #investigate this number
+  memory_size      = 128 #investigate this number
+
+  environment {
+    variables = {
+       BUCKET_NAME = aws_s3_bucket.file_sharing.bucket
+      AWS_REGION  = data.aws_region.current.name
+    }
+  }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.lambda_logs, #investigate why this depnds value
+    aws_iam_role_policy_attachment.lambda_s3_access #investigate why this depnds value
+  ]
+  
+  tags = merge(local.common_tags, {
+    Name = "Presigned URL API Lambda"
+    Description = "Lambda for generating presigned URLs"
+  })
+   
+}
+
+# LAMBDA PERMISSIONS FOR API GATEWAY
+resource "aws_lambda_permission" "api_gateway_health" {
+   statement_id  = "AllowAPIGatewayInvoke-Health"
+   action        = "lambda:InvokeFunction"
+   function_name = aws_lambda_function.presigned_url_api.function_name
+   principal     = "apigateway.amazonaws.com"
+   source_arn = "${aws_apigatewayv2_api.file_sharing_api.execution_arn}/*/GET/health"
+}
+
+
+resource "aws_lambda_permission" "api_gateway_upload" {
+   statement_id  = "AllowAPIGatewayInvoke-Upload"
+   action        = "lambda:InvokeFunction"
+   function_name = aws_lambda_function.presigned_url_api.function_name
+   principal     = "apigateway.amazonaws.com"
+   source_arn = "${aws_apigatewayv2_api.file_sharing_api.execution_arn}/*/POST/upload-url"
+}
+
+resource "aws_lambda_permission" "api_gateway_download" {
+   statement_id  = "AllowAPIGatewayInvoke-Download"
+   action        = "lambda:InvokeFunction"
+   function_name = aws_lambda_function.presigned_url_api.function_name
+   principal     = "apigateway.amazonaws.com"
+   source_arn = "${aws_apigatewayv2_api.file_sharing_api.execution_arn}/*/POST/download-url"
+}
