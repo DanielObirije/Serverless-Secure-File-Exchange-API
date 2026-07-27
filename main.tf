@@ -25,6 +25,280 @@ locals {
   )
 }
 
+
+#Data source to get the Lambda zip file
+data "archive_file" "lambda_zip"{
+  type = "zip"
+  source_dir = "${path.module}/lambda"
+  output_path = "${path.module}/lambda-function.zip"
+  excludes = [ 
+     ".git",
+    "*.go",
+    "go.mod",
+    "go.sum",
+    "Makefile",
+    "README.md"
+   ]
+   # check this out later the excludes and paths in golang
+}
+
+#Iam role for lambda execution
+resource "aws_iam_role" "lambda_execution_role" {
+  name = "${local.project_name}-lambda_execution_role"
+  assume_role_policy = jsondecode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        }
+      }
+    ]
+  })
+  tags = merge(local.common_tags, {
+    Name = "Lambda Execution Role"
+    Description = "IAM role for Lambda function execution"
+  })
+}
+
+# IAM policy for Lambda to write logs
+resource "aws_iam_role_policy_attachment" "lambda_logs" {
+  role       = aws_iam_role.lambda_execution_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+# IAM Policy for S3 access
+resource "aws_iam_policy" "lambda_s3_policy" {
+  name = "${local.bucket_name}-lambda_s3_policy"
+  description = "Allows Lambda to generate presigned URLs for S3"
+  policy = jsondecode({
+       Version = "2012-10-17"
+       Statement = [
+        {
+          Effect = "Allow"
+          Action = [
+            "s3:GetObject",
+            "s3:PutObject",
+            "s3:DeleteObject",
+            "s3:GetObjectVersion",
+            "s3:PutObjectAcl"
+          ]
+          Resource = [
+            "${aws_s3_bucket.file_sharing.arn}/*"
+          ]
+        },
+        {
+          Effect = "Allow"
+          Action = [
+          "s3:ListBucket",
+          "s3:GetBucketLocation",
+          "s3:GetBucketVersioning"
+          ]
+          Resource = "${aws_s3_bucket.file_sharing.arn}"
+        }
+       ]
+  })
+}
+
+
+# IAM policy for Lambda to access S3
+resource "aws_iam_role_policy_attachment" "lambda_s3_access" {
+  role       = aws_iam_role.lambda_execution_role.name
+  policy_arn = aws_iam_policy.lambda_s3_policy.arn
+}
+
+# Lambda function
+resource "aws_lambda_function" "presigned_url_api" {
+  filename = data.archive_file.lambda_zip.output_path
+  function_name = "${local.project_name}-presigned-url-api"
+  role = aws_iam_role.lambda_execution_role.arn
+  handler = "bootstrap"  #investigate this For Go on provided.al2
+  runtime = "provided.al2"
+  timeout          = 10 #investigate this number
+  memory_size      = 128 #investigate this number
+
+  environment {
+    variables = {
+       BUCKET_NAME = aws_s3_bucket.file_sharing.bucket
+      AWS_REGION  = data.aws_region.current.name
+    }
+  }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.lambda_logs, #investigate why this depnds value
+    aws_iam_role_policy_attachment.lambda_s3_access #investigate why this depnds value
+  ]
+  
+  tags = merge(local.common_tags, {
+    Name = "Presigned URL API Lambda"
+    Description = "Lambda for generating presigned URLs"
+  })
+   
+}
+
+# Lambda CloudWatch Log Group
+resource "aws_cloudwatch_log_group" "lambda_logs" {
+  name = "/aws/lambda/${aws_lambda_function.presigned_url_api.function_name}"
+  retention_in_days = 7
+  tags = merge(local.common_tags, {
+    Name = "Lambda Log Group"
+    Description = "CloudWatch logs for presigned URL Lambda"
+  })
+}
+
+
+# # API GATEWAY RESOURCES
+
+# # Rest API
+# resource "aws_api_gateway_rest_api" "file_sharing_api" {
+#   name = "${local.project_name}-api"
+#   description = "File Sharing API for generating presigned URLs"
+
+#   endpoint_configuration {
+#     types = ["REGIONAL"] #investigate this 
+#   }
+
+#   tags = merge(local.common_tags, {
+#     Name = "File Sharing API"
+#     Description = "API Gateway for file sharing service"
+#   })
+# }
+
+resource "aws_apigatewayv2_api" "file_sharing_api" {
+  name          = "${local.project_name}-api"
+  protocol_type = "HTTP"
+
+  cors_configuration {
+    allow_origins = ["*"]
+    allow_methods = ["GET", "POST"]
+    allow_headers = ["*"]
+  }
+
+  tags = merge(local.common_tags, {
+    Name = "File Sharing API"
+  })
+}
+
+# # API Gateway Resource: /health
+# resource "aws_api_gateway_resource" "health" {
+#   rest_api_id = aws_api_gateway_rest_api.file_sharing_api.id
+#   parent_id = aws_api_gateway_rest_api.file_sharing_api.root_resource_id #investigate this what is rootresouce
+#   path_part = "health"
+# }
+
+# # API Gateway Resource: /upload-url
+# resource "aws_api_gateway_resource" "upload-url" {
+#   rest_api_id = aws_api_gateway_rest_api.file_sharing_api.id
+#   parent_id = aws_api_gateway_rest_api.file_sharing_api.root_resource_id #investigate this what is rootresouce
+#   path_part = "upload-url"
+# }
+
+# # API Gateway Resource: /download-url
+# resource "aws_api_gateway_resource" "download-url" {
+#   rest_api_id = aws_api_gateway_rest_api.file_sharing_api.id
+#   parent_id = aws_api_gateway_rest_api.file_sharing_api.root_resource_id #investigate this what is rootresouce
+#   path_part = "download-url"
+# }
+
+
+# #API GATEWAY METHODS
+
+# # GET /health
+# resource "aws_api_gateway_method" "health_get" {
+#   rest_api_id = aws_api_gateway_rest_api.file_sharing_api.id
+#   resource_id = aws_api_gateway_resource.health.id
+#   http_method = "GET"
+#   authorization    = "NONE"
+#   api_key_required = false
+# }
+
+# # POST /upload-url
+# resource "aws_api_gateway_method" "upload_url_post" {
+#   rest_api_id = aws_api_gateway_rest_api.file_sharing_api.id
+#   resource_id = aws_api_gateway_resource.upload-url.id
+#   http_method = "POST"
+#   authorization    = "NONE"
+#   api_key_required = false
+# }
+
+# # POST /download-url
+# resource "aws_api_gateway_method" "download_url_post" {
+#   rest_api_id = aws_api_gateway_rest_api.file_sharing_api.id
+#   resource_id = aws_api_gateway_resource.download-url.id
+#   http_method = "POST"
+#   authorization    = "NONE"
+#   api_key_required = false
+# }
+
+# # API GATEWAY INTEGRATIONS
+
+resource "aws_apigatewayv2_integration" "lambda" {
+  api_id                 = aws_apigatewayv2_api.file_sharing_api.id
+  integration_type       = "AWS_PROXY"
+  integration_uri        = aws_lambda_function.presigned_url_api.invoke_arn
+  payload_format_version = "2.0"
+}
+
+# # GET /health integration
+# resource "aws_api_gateway_integration" "health_integration" {
+#   rest_api_id = aws_api_gateway_rest_api.file_sharing_api.id
+#   resource_id = aws_api_gateway_resource.health.id
+#   http_method = aws_api_gateway_method.health_get.http_method
+#   integration_http_method = "POST"
+#   type                    = "AWS_PROXY"
+#   uri                     = aws_lambda_function.presigned_url_api.invoke_arn
+# }
+
+# # POST /upload-url integration
+# resource "aws_api_gateway_integration" "upload_url_integration" {
+#   rest_api_id = aws_api_gateway_rest_api.file_sharing_api.id
+#   resource_id = aws_api_gateway_resource.upload-url.id
+#   http_method = aws_api_gateway_method.upload_url_post.http_method
+#   integration_http_method = "POST"
+#   type                    = "AWS_PROXY"
+#   uri                     = aws_lambda_function.presigned_url_api.invoke_arn
+# }
+
+# # POST /download-url integration
+# resource "aws_api_gateway_integration" "download_url_integration" {
+#   rest_api_id             = aws_api_gateway_rest_api.file_sharing_api.id
+#   resource_id             = aws_api_gateway_resource.download-url.id
+#   http_method             = aws_api_gateway_method.upload_url_post.http_method
+#   integration_http_method = "POST"
+#   type                    = "AWS_PROXY"
+#   uri                     = aws_lambda_function.presigned_url_api.invoke_arn
+# }
+
+resource "aws_apigatewayv2_route" "health" {
+  api_id    = aws_apigatewayv2_api.file_sharing_api.id
+  route_key = "GET /health"
+  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+}
+
+resource "aws_apigatewayv2_route" "upload" {
+  api_id    = aws_apigatewayv2_api.file_sharing_api.id
+  route_key = "POST /upload-url"
+  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+}
+
+resource "aws_apigatewayv2_route" "download" {
+  api_id    = aws_apigatewayv2_api.file_sharing_api.id
+  route_key = "POST /download-url"
+  target    = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+}
+
+
+
+# API GATEWAY DEPLOYMENT & STAGE
+resource "aws_apigatewayv2_stage" "default" {
+  api_id      = aws_apigatewayv2_api.file_sharing_api.id
+  name        = "$default"
+  auto_deploy = true
+}
+
+
 # S3 bucket for access logs (if access logging is enabled)
 resource "aws_s3_bucket" "access_logs" {
   bucket = "${local.access_log_bucket_name}-access-logs"
@@ -33,6 +307,7 @@ resource "aws_s3_bucket" "access_logs" {
       Description = "Stores access for the main sharing bucket"
   })
 }
+
 
 # Block public access for access logs bucket
 resource "aws_s3_bucket_public_access_block" "access_logs" {
