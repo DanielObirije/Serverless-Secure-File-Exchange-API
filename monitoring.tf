@@ -9,7 +9,7 @@ resource "aws_cloudwatch_log_group" "lambda_logs" {
 }
 
 resource "aws_cloudwatch_log_group" "api_gateway_logs" {
-  name              = "/aws/api-gateway/${aws_api_gateway_rest_api.file_sharing_api.name}"
+  name              = "/aws/api-gateway/${aws_apigatewayv2_api.file_sharing_api.name}"
   retention_in_days = 7
   
   tags = merge(local.common_tags, {
@@ -21,9 +21,9 @@ resource "aws_cloudwatch_log_group" "api_gateway_logs" {
 # CloudWatch Log Group for monitoring S3 access (if CloudTrail is enabled)
 resource "aws_cloudwatch_log_group" "s3_access_logs" {
   count =  local.enable_cloudtrail_logging ? [1] : []
-  name = "/aws/cloudtrail/${local.project_name}-s3-access"
+  name = "/aws/cloudtrail/${aws_s3_bucket.access_logs.bucket}"
   retention_in_days = 30
-  
+   
   tags = merge(local.common_tags,{
     Name = "S3 Access Logs"
     Description = "CloudWatch logs for S3 API access"

@@ -1,4 +1,4 @@
-module main.go
+module lambda
 
 go 1.26.5
 

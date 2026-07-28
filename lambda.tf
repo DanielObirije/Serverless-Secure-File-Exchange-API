@@ -7,11 +7,8 @@ data "archive_file" "lambda_zip"{
      ".git",
     "*.go",
     "go.mod",
-    "go.sum",
-    "Makefile",
-    "README.md"
+    "go.sum"
    ]
-   # check this out later the excludes and paths in golang
 }
 
 # Lambda function
@@ -19,10 +16,10 @@ resource "aws_lambda_function" "presigned_url_api" {
   filename = data.archive_file.lambda_zip.output_path
   function_name = "${local.project_name}-presigned-url-api"
   role = aws_iam_role.lambda_execution_role.arn
-  handler = "bootstrap"  #investigate this For Go on provided.al2
+  handler = "bootstrap"
   runtime = "provided.al2"
-  timeout          = 10 #investigate this number
-  memory_size      = 128 #investigate this number
+  timeout          = 10 
+  memory_size      = 128
 
   environment {
     variables = {
