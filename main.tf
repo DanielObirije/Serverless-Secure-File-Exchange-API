@@ -14,6 +14,7 @@ locals {
   enable_uploads_cleanup = true
   enable_cloudtrail_logging = true
   notification_email = "johndoe@gmail.com"
+  enable_notifications = true
   project_name = "file-sharing-demo"
   common_tags = merge(
     {

@@ -1,6 +1,6 @@
 # S3 bucket for access logs (if access logging is enabled)
 resource "aws_s3_bucket" "access_logs" {
-  bucket = "${local.access_log_bucket_name}-access-logs"
+  bucket = "${local.access_log_bucket_name}"
   tags = merge(local.common_tags,{
       Name = "Access log bucket"
       Description = "Stores access for the main sharing bucket"
@@ -29,11 +29,17 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "access_logs" {
 
 # Main S3 bucket for file sharing
 resource "aws_s3_bucket" "file_sharing" {
-  bucket = local.access_log_bucket_name
+  bucket = local.bucket_name
   tags = merge(local.common_tags,{
     Name = "File sharing bucket"
     Description = "Main bucket for secure file sharing using presigned URLs"
   })
+}
+ 
+# Enable publish request metrics by default
+resource "aws_s3_bucket_metric" "file_sharing" {
+  bucket = aws_s3_bucket.file_sharing.id
+  name = "EntireBucket"
 }
 
 # Block all public access to the file sharing bucket
@@ -69,13 +75,13 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "file_sharing" {
 # Access logging configuration (if enabled)
 resource "aws_s3_bucket_logging" "file_sharing" {
   bucket = aws_s3_bucket.file_sharing.id
-  target_bucket = aws_s3_bucket.file_sharing.id
+  target_bucket = aws_s3_bucket.access_logs.id
   target_prefix = "access-logs/"
 }
 
 # CORS configuration to enable web browser access to presigned URLs
 resource "aws_s3_bucket_cors_configuration" "file_sharing" {
-  bucket =  aws_s3_bucket_logging.file_sharing.id
+  bucket =  aws_s3_bucket.file_sharing.id
   cors_rule {
     allowed_headers = ["*"]
     allowed_methods = ["GET", "PUT", "POST", "DELETE", "HEAD"]

@@ -1,7 +1,7 @@
 #Iam role for lambda execution
 resource "aws_iam_role" "lambda_execution_role" {
   name = "${local.project_name}-lambda_execution_role"
-  assume_role_policy = jsondecode({
+  assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
@@ -30,7 +30,7 @@ resource "aws_iam_role_policy_attachment" "lambda_logs" {
 resource "aws_iam_policy" "lambda_s3_policy" {
   name = "${local.bucket_name}-lambda_s3_policy"
   description = "Allows Lambda to generate presigned URLs for S3"
-  policy = jsondecode({
+  policy = jsonencode({
        Version = "2012-10-17"
        Statement = [
         {
@@ -40,7 +40,9 @@ resource "aws_iam_policy" "lambda_s3_policy" {
             "s3:PutObject",
             "s3:DeleteObject",
             "s3:GetObjectVersion",
-            "s3:PutObjectAcl"
+            "s3:PutObjectAcl",
+            "s3:AbortMultipartUpload",
+            "s3:ListMultipartUploadParts"
           ]
           Resource = [
             "${aws_s3_bucket.file_sharing.arn}/*"
@@ -54,6 +56,14 @@ resource "aws_iam_policy" "lambda_s3_policy" {
           "s3:GetBucketVersioning"
           ]
           Resource = "${aws_s3_bucket.file_sharing.arn}"
+          Condition = {
+            StringLike = {
+              "s3:prefix" = [
+                "uploads/*",
+                "documents/*"
+              ]
+            }
+          }
         }
        ]
   })
@@ -70,7 +80,7 @@ resource "aws_iam_role_policy_attachment" "lambda_s3_access" {
 
 # IAM role for CloudTrail logs
 resource "aws_iam_role" "cloudtrail_logs" {
-   count =  local.enable_cloudtrail_logging ? [1] : []
+   count =  local.enable_cloudtrail_logging ? 1 : 0
    name = "${local.project_name}-cloudtrail-logs-role"
    assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -78,9 +88,9 @@ resource "aws_iam_role" "cloudtrail_logs" {
       {
         Action = "sts:AssumeRole"
         Effect = "Allow"
-        Principal = [
-          "cloudtrail.amazonaws.com",
-        ]
+        Principal = {
+         Service = "cloudtrail.amazonaws.com",
+        }
       }
     ]
   })
@@ -90,7 +100,7 @@ resource "aws_iam_role" "cloudtrail_logs" {
 
 # IAM policy for CloudTrail to write to CloudWatch Logs
 resource "aws_iam_role_policy" "cloudtrail_logs" {
-  count =  local.enable_cloudtrail_logging ? [1] : []
+  count =  local.enable_cloudtrail_logging ? 1 : 0
    name = "${local.project_name}-cloudtrail-logs-policy"
    role = aws_iam_role.cloudtrail_logs[0].id
 
@@ -104,6 +114,36 @@ resource "aws_iam_role_policy" "cloudtrail_logs" {
           "logs:PutLogEvents"
         ]
         Resource = "${aws_cloudwatch_log_group.s3_access_logs[0].arn}:*"
+      }
+    ]
+  })
+}
+
+resource "aws_s3_bucket_policy" "file_sharing" {
+  bucket = aws_s3_bucket.file_sharing.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+
+    Statement = [
+      {
+        Sid    = "DenyHTTP"
+        Effect = "Deny"
+
+        Principal = "*"
+
+        Action = "s3:*"
+
+        Resource = [
+          aws_s3_bucket.file_sharing.arn,
+          "${aws_s3_bucket.file_sharing.arn}/*"
+        ]
+
+        Condition = {
+          Bool = {
+            "aws:SecureTransport" = "false"
+          }
+        }
       }
     ]
   })

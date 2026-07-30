@@ -17,9 +17,10 @@ resource "aws_lambda_function" "presigned_url_api" {
   function_name = "${local.project_name}-presigned-url-api"
   role = aws_iam_role.lambda_execution_role.arn
   handler = "bootstrap"
-  runtime = "provided.al2"
+  runtime = "provided.al2023"
   timeout          = 10 
   memory_size      = 128
+  reserved_concurrent_executions = 10
 
   environment {
     variables = {

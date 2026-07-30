@@ -2,6 +2,9 @@
 resource "aws_cloudwatch_log_group" "lambda_logs" {
   name = "/aws/lambda/${aws_lambda_function.presigned_url_api.function_name}"
   retention_in_days = 7
+  depends_on=[
+    aws_cloudwatch_log_group.lambda_logs
+  ]
   tags = merge(local.common_tags, {
     Name = "Lambda Log Group"
     Description = "CloudWatch logs for presigned URL Lambda"
@@ -20,7 +23,7 @@ resource "aws_cloudwatch_log_group" "api_gateway_logs" {
 
 # CloudWatch Log Group for monitoring S3 access (if CloudTrail is enabled)
 resource "aws_cloudwatch_log_group" "s3_access_logs" {
-  count =  local.enable_cloudtrail_logging ? [1] : []
+  count =  local.enable_cloudtrail_logging ? 1 : 0
   name = "/aws/cloudtrail/${aws_s3_bucket.access_logs.bucket}"
   retention_in_days = 30
    
@@ -31,7 +34,7 @@ resource "aws_cloudwatch_log_group" "s3_access_logs" {
 }
 
 resource "aws_cloudtrail" "s3_access" {
-   count =  local.enable_cloudtrail_logging ? [1] : []
+   count =  local.enable_cloudtrail_logging ? 1 : 0
    name = "${local.project_name}-s3-cloudtrail"
    s3_bucket_name = aws_s3_bucket.file_sharing.bucket
    include_global_service_events = false
@@ -67,7 +70,7 @@ resource "aws_cloudtrail" "s3_access" {
 
 # SNS topic for notifications (if email is provided)
 resource "aws_sns_topic" "file_sharing_alerts" {
-   count =  local.notification_email ? [1] : []
+   count =  local.enable_notifications ? 1 : 0
    name = "${local.project_name}-file-sharing-alerts"
    tags = merge(local.common_tags, {
     Name        = "File Sharing Alerts"
@@ -78,7 +81,7 @@ resource "aws_sns_topic" "file_sharing_alerts" {
 
 # SNS subscription for email notifications
 resource "aws_sns_topic_subscription" "file_sharing_alerts" {
-  count =  local.notification_email ? [1] : []
+  count =  local.enable_notifications ? 1 : 0
   topic_arn =  aws_sns_topic.file_sharing_alerts[0].arn
   protocol = "email"
   endpoint = local.notification_email
@@ -86,7 +89,7 @@ resource "aws_sns_topic_subscription" "file_sharing_alerts" {
 
 # CloudWatch metric alarm for unusual S3 access patterns
 resource "aws_cloudwatch_metric_alarm" "high_s3_requests" {
-  count =  local.notification_email ? [1] : []
+  count =  local.enable_notifications  ? 1 : 0
   alarm_name =  "${local.project_name}-high-s3-requests"
   comparison_operator = "GreaterThanThreshold"
   evaluation_periods  = "2"
@@ -100,9 +103,11 @@ resource "aws_cloudwatch_metric_alarm" "high_s3_requests" {
 
   dimensions = {
     BucketName = aws_s3_bucket.file_sharing.bucket
+     FilterId    = "EntireBucket"
   }
   tags = merge(local.common_tags, {
     Name        = "High S3 Requests Alarm"
     Description = "Monitors for unusual S3 access patterns"
   })
 }
+
