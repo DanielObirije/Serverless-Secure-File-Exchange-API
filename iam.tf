@@ -10,7 +10,7 @@ resource "aws_iam_role" "lambda_execution_role" {
         Principal = {
           Service = "lambda.amazonaws.com"
         }
-      }
+      } 
     ]
   })
   tags = merge(local.common_tags, {
@@ -20,7 +20,7 @@ resource "aws_iam_role" "lambda_execution_role" {
 }
 
 # IAM policy for Lambda to write logs
-resource "aws_iam_role_policy_attachment" "lambda_logs" {
+resource "aws_iam_role_policy_attachment" "lambda_logs" { 
   role       = aws_iam_role.lambda_execution_role.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }

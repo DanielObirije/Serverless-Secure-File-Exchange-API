@@ -1,6 +1,6 @@
 # Data source for current AWS caller identity
 data "aws_caller_identity" "current" {}
-
+data "aws_region" "current" {}
 resource "random_string" "bucket_surffix" {
   length = 6
   special = false

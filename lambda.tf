@@ -1,3 +1,18 @@
+resource "terraform_data" "lambda_build" {
+  triggers_replace = [
+    filemd5("${path.module}/lambda/main.go"),
+    filemd5("${path.module}/lambda/go.mod"),
+    filemd5("${path.module}/lambda/go.sum")
+  ]
+
+  provisioner "local-exec" {
+    command = <<EOF
+      cd ${path.module}/lambda
+      GOOS=linux GOARCH=amd64 go build -o bootstrap main.go
+    EOF
+  }
+}
+
 #Data source to get the Lambda zip file
 data "archive_file" "lambda_zip"{
   type = "zip"
@@ -9,6 +24,7 @@ data "archive_file" "lambda_zip"{
     "go.mod",
     "go.sum"
    ]
+    depends_on = [terraform_data.lambda_build]
 }
 
 # Lambda function
@@ -30,8 +46,8 @@ resource "aws_lambda_function" "presigned_url_api" {
   }
 
   depends_on = [
-    aws_iam_role_policy_attachment.lambda_logs, #investigate why this depnds value
-    aws_iam_role_policy_attachment.lambda_s3_access #investigate why this depnds value
+    aws_iam_role_policy_attachment.lambda_logs,
+    aws_iam_role_policy_attachment.lambda_s3_access
   ]
   
   tags = merge(local.common_tags, {
