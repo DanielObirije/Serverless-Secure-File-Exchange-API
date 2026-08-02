@@ -52,12 +52,6 @@ resource "aws_cloudtrail" "s3_access" {
       type   = "AWS::S3::Object"
       values = ["${aws_s3_bucket.file_sharing.arn}/*"]
      }
-
-     data_resource {
-      type   = "AWS::S3::Bucket"
-      values = ["${aws_s3_bucket.file_sharing.arn}"]
-     }
-
    }
    tags = merge(local.common_tags,{
     Name        = "S3 CloudTrail"

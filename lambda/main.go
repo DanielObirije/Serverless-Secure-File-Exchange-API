@@ -65,7 +65,7 @@ func init() {
 	if bucketName == "" {
 		log.Fatal("BUCKET_NAME environment variable is required")
 	}
-	region := os.Getenv("AWS_REGION")
+	region := os.Getenv("APP_AWS_REGION")
 	if region == "" {
 		region = "us-east-1"
 	}

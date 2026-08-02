@@ -41,7 +41,7 @@ resource "aws_lambda_function" "presigned_url_api" {
   environment {
     variables = {
        BUCKET_NAME = aws_s3_bucket.file_sharing.bucket
-      AWS_REGION  = data.aws_region.current.name
+      APP_AWS_REGION  = data.aws_region.current.name
     }
   }
 
