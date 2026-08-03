@@ -72,7 +72,7 @@ resource "aws_apigatewayv2_stage" "default" {
     })
  }
  tags = merge(local.common_tags, {
-  Name        = "API Gateway $default Stage"
+  Name        = "API Gateway default Stage"
   Description = "Default stage with automatic deployment for file sharing API"
 })
 }

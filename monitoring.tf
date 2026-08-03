@@ -36,7 +36,7 @@ resource "aws_cloudwatch_log_group" "s3_access_logs" {
 resource "aws_cloudtrail" "s3_access" {
    count =  local.enable_cloudtrail_logging ? 1 : 0
    name = "${local.project_name}-s3-cloudtrail"
-   s3_bucket_name = aws_s3_bucket.file_sharing.bucket
+   s3_bucket_name = aws_s3_bucket.access_logs.bucket
    include_global_service_events = false
    is_multi_region_trail = false
    enable_logging = true

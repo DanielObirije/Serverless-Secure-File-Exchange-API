@@ -119,15 +119,78 @@ resource "aws_iam_role_policy" "cloudtrail_logs" {
   })
 }
 
-resource "aws_s3_bucket_policy" "file_sharing" {
-  bucket = aws_s3_bucket.file_sharing.id
+# resource "aws_s3_bucket_policy" "file_sharing" {
+#   bucket = aws_s3_bucket.file_sharing.id
+
+#   policy = jsonencode({
+#     Version = "2012-10-17"
+
+#     Statement = [
+#       {
+#         Sid    = "DenyHTTP"
+#         Effect = "Deny"
+
+#         Principal = "*"
+
+#         Action = "s3:*"
+
+#         Resource = [
+#           aws_s3_bucket.file_sharing.arn,
+#           "${aws_s3_bucket.file_sharing.arn}/*"
+#         ]
+
+#         Condition = {
+#           Bool = {
+#             "aws:SecureTransport" = "false"
+#           }
+#         }
+#       }
+#     ]
+#   })
+# }
+
+resource "aws_s3_bucket_policy" "access_logs" {
+  bucket = aws_s3_bucket.access_logs.id
 
   policy = jsonencode({
     Version = "2012-10-17"
 
     Statement = [
+
       {
-        Sid    = "DenyHTTP"
+        Sid    = "AWSCloudTrailAclCheck"
+        Effect = "Allow"
+
+        Principal = {
+          Service = "cloudtrail.amazonaws.com"
+        }
+
+        Action = "s3:GetBucketAcl"
+
+        Resource = aws_s3_bucket.access_logs.arn
+      },
+
+      {
+        Sid    = "AWSCloudTrailWrite"
+        Effect = "Allow"
+
+        Principal = {
+          Service = "cloudtrail.amazonaws.com"
+        }
+
+        Action = "s3:PutObject"
+
+        Resource = "${aws_s3_bucket.access_logs.arn}/AWSLogs/${data.aws_caller_identity.current.account_id}/*"
+
+        Condition = {
+          StringEquals = {
+            "s3:x-amz-acl" = "bucket-owner-full-control"
+          }
+        }
+      },
+
+      {
+        Sid = "DenyHTTP"
         Effect = "Deny"
 
         Principal = "*"
@@ -135,8 +198,8 @@ resource "aws_s3_bucket_policy" "file_sharing" {
         Action = "s3:*"
 
         Resource = [
-          aws_s3_bucket.file_sharing.arn,
-          "${aws_s3_bucket.file_sharing.arn}/*"
+          aws_s3_bucket.access_logs.arn,
+          "${aws_s3_bucket.access_logs.arn}/*"
         ]
 
         Condition = {

@@ -36,7 +36,7 @@ resource "aws_lambda_function" "presigned_url_api" {
   runtime = "provided.al2023"
   timeout          = 10 
   memory_size      = 128
-  reserved_concurrent_executions = 10
+  # reserved_concurrent_executions = 10
 
   environment {
     variables = {
